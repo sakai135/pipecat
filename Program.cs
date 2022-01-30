@@ -30,10 +30,10 @@ using
     ((NamedPipeClientStream)namedPipe).Connect();
     Log("Connected");
 
-    await Task.WhenAll
+    Parallel.Invoke
     (
-        Task.Run(() => Copy(input, namedPipe)),
-        Task.Run(() => Copy(namedPipe, output))
+        () => Copy(input, namedPipe),
+        () => Copy(namedPipe, output)
     );
 }
 
@@ -44,8 +44,13 @@ void Log(string msg)
 
 void Copy(Stream input, Stream output)
 {
+    Span<byte> buffer = stackalloc byte[bufferSize];
     while (true)
     {
-        input.CopyTo(output, bufferSize);
+        var bytesRead = input.Read(buffer);
+        if (bytesRead > 0)
+        {
+            output.Write(buffer.Slice(0, bytesRead));
+        }
     }
 }
