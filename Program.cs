@@ -3,10 +3,9 @@ using System.IO;
 using System.IO.Pipelines;
 using System.IO.Pipes;
 using System.Threading.Tasks;
-using PipeOptions = System.IO.Pipes.PipeOptions;
+using NamedPipeOptions = System.IO.Pipes.PipeOptions;
 
 const string serverName = ".";
-const int minimumBufferSize = 8192;
 
 if (!Console.IsInputRedirected || !Console.IsOutputRedirected)
 {
@@ -23,7 +22,7 @@ var pipeName = args[0];
 Log($"Connecting to \\\\{serverName}\\pipe\\{pipeName} ...");
 using
 (
-    Stream namedPipe = new NamedPipeClientStream(serverName, pipeName, PipeDirection.InOut, PipeOptions.Asynchronous),
+    Stream namedPipe = new NamedPipeClientStream(serverName, pipeName, PipeDirection.InOut, NamedPipeOptions.Asynchronous),
     input = Console.OpenStandardInput(),
     output = Console.OpenStandardOutput()
 )
@@ -34,12 +33,12 @@ using
     var pipeFromInput = new Pipe();
     var pipeToOutput = new Pipe();
 
-    await Task.WhenAll
+    Parallel.Invoke
     (
-        Read(pipeFromInput.Writer, input),
-        Write(pipeFromInput.Reader, namedPipe),
-        Read(pipeToOutput.Writer, namedPipe),
-        Write(pipeToOutput.Reader, output)
+        () => Read(pipeFromInput.Writer, input).Wait(),
+        () => Write(pipeFromInput.Reader, namedPipe).Wait(),
+        () => Read(pipeToOutput.Writer, namedPipe).Wait(),
+        () => Write(pipeToOutput.Reader, output).Wait()
     );
 }
 
@@ -48,39 +47,26 @@ void Log(string msg)
     Console.Error.WriteLine(msg);
 }
 
-void LogException(Exception ex)
-{
-    Console.Error.WriteLine(ex.Message);
-    Console.Error.WriteLine(ex.StackTrace);
-}
-
 async Task Read(PipeWriter writer, Stream input)
 {
     while (true)
     {
-        var memory = writer.GetMemory(minimumBufferSize);
-        try
-        {
-            var bytesRead = await input.ReadAsync(memory);
-            // Log($"read {bytesRead}");
-            if (bytesRead == 0)
-            {
-                break;
-            }
-            writer.Advance(bytesRead);
-        }
-        catch (Exception ex)
-        {
-            LogException(ex);
-            break;
-        }
-        var result = await writer.FlushAsync();
+        var task = InnerRead(writer, input);
+        var result = task.IsCompletedSuccessfully ? task.Result : await task;
         if (result.IsCompleted)
         {
             break;
         }
     }
     writer.Complete();
+}
+
+ValueTask<FlushResult> InnerRead(PipeWriter writer, Stream input)
+{
+    var span = writer.GetSpan();
+    var bytesRead = input.Read(span);
+    writer.Advance(bytesRead);
+    return writer.FlushAsync();
 }
 
 async Task Write(PipeReader reader, Stream output)
@@ -91,13 +77,13 @@ async Task Write(PipeReader reader, Stream output)
         var seq = result.Buffer;
         if (seq.IsSingleSegment)
         {
-            await output.WriteAsync(seq.First);
+            output.Write(seq.FirstSpan);
         }
         else
         {
             foreach (var mem in seq)
             {
-                await output.WriteAsync(mem);
+                output.Write(mem.Span);
             }
         }
         reader.AdvanceTo(seq.End);
