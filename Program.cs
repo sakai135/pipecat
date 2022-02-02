@@ -1,11 +1,11 @@
 ﻿using System;
 using System.IO;
+using System.IO.Pipelines;
 using System.IO.Pipes;
 using System.Threading.Tasks;
-using PipeOptions = System.IO.Pipes.PipeOptions;
+using NamedPipeOptions = System.IO.Pipes.PipeOptions;
 
 const string serverName = ".";
-const int bufferSize = 8192;
 
 if (!Console.IsInputRedirected || !Console.IsOutputRedirected)
 {
@@ -22,18 +22,18 @@ var pipeName = args[0];
 Log($"Connecting to \\\\{serverName}\\pipe\\{pipeName} ...");
 using
 (
-    Stream namedPipe = new NamedPipeClientStream(serverName, pipeName, PipeDirection.InOut, PipeOptions.Asynchronous),
-    input = Console.OpenStandardInput(),
-    output = Console.OpenStandardOutput()
+    Stream npipe = new NamedPipeClientStream(serverName, pipeName, PipeDirection.InOut, NamedPipeOptions.Asynchronous),
+    stdin = Console.OpenStandardInput(),
+    stdout = Console.OpenStandardOutput()
 )
 {
-    ((NamedPipeClientStream)namedPipe).Connect();
+    ((NamedPipeClientStream)npipe).Connect();
     Log("Connected");
 
     await Task.WhenAll
-    (
-        Task.Run(() => Copy(input, namedPipe)),
-        Task.Run(() => Copy(namedPipe, output))
+    (     
+        Connect(stdin, npipe),
+        Connect(npipe, stdout)
     );
 }
 
@@ -42,10 +42,11 @@ void Log(string msg)
     Console.Error.WriteLine(msg);
 }
 
-void Copy(Stream input, Stream output)
+async Task Connect(Stream input, Stream output)
 {
+    var reader = PipeReader.Create(input);
     while (true)
     {
-        input.CopyTo(output, bufferSize);
+        await reader.CopyToAsync(output);
     }
 }
